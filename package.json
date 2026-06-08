@@ -1,0 +1,23 @@
+{
+  "name": "observabilidade-demo",
+  "version": "1.0.0",
+  "description": "Projeto de demonstração de observabilidade com Node.js, Prometheus e Grafana",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "load:normal": "node scripts/load-normal.js",
+    "load:stress": "node scripts/load-stress.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "prom-client": "^15.1.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.7",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.5"
+  }
+}

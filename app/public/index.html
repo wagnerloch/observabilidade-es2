@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pizzaria Observável — Painel</title>
+<style>
+  :root { --bg:#0f1420; --card:#171e2e; --borda:#263049; --txt:#e6e9f2; --sub:#94a0bc; --laranja:#f46800; --verde:#3fb950; --amarelo:#e3b341; --vermelho:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:24px 32px; border-bottom:1px solid var(--borda); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+  h1 { margin:0; font-size:22px; } h1 span { color:var(--laranja); }
+  header p { margin:4px 0 0; color:var(--sub); font-size:14px; }
+  main { display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:20px; padding:24px 32px; max-width:1200px; }
+  .card { background:var(--card); border:1px solid var(--borda); border-radius:12px; padding:20px; }
+  .card h2 { margin:0 0 4px; font-size:16px; } .card .sub { color:var(--sub); font-size:13px; margin:0 0 16px; }
+  select, button { font:inherit; border-radius:8px; border:1px solid var(--borda); background:#0f1420; color:var(--txt); padding:8px 12px; }
+  button { cursor:pointer; } button:hover { border-color:var(--laranja); }
+  button.primario { background:var(--laranja); border-color:var(--laranja); color:#fff; font-weight:600; }
+  .linha { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  .servico { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-top:1px solid var(--borda); gap:8px; flex-wrap:wrap; }
+  .servico b { text-transform:capitalize; }
+  .modo { font-size:12px; padding:2px 8px; border-radius:20px; margin-left:6px; }
+  .modo.normal { background:#1b3a24; color:var(--verde);} .modo.lento { background:#3a3115; color:var(--amarelo);} .modo.erros, .modo.fora { background:#3d1b1b; color:var(--vermelho);}
+  .servico button { padding:4px 10px; font-size:13px; } .servico button.ativo { border-color:var(--laranja); color:var(--laranja); }
+  #saida { font-family: ui-monospace, Menlo, monospace; font-size:12px; background:#0b0f18; border-radius:8px; padding:12px; height:220px; overflow:auto; white-space:pre-wrap; border:1px solid var(--borda); }
+  a { color:var(--laranja); } ul.links { padding-left:18px; margin:0; line-height:1.9; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🍕 Pizzaria <span>Observável</span></h1>
+    <p>Engenharia de Software II — aula de Observabilidade. Gere tráfego, provoque incidentes e investigue no Grafana.</p>
+  </div>
+</header>
+<main>
+  <section class="card">
+    <h2>Fazer pedidos</h2>
+    <p class="sub">O gerador de carga já envia pedidos sozinho. Use aqui para pedidos manuais.</p>
+    <div class="linha">
+      <select id="sabor"></select>
+      <select id="qtd"><option>1</option><option>2</option><option>3</option></select>
+      <button class="primario" onclick="pedir()">Pedir</button>
+    </div>
+    <div class="linha">
+      <button onclick="rajada(20)">Rajada de 20 pedidos</button>
+      <button onclick="pedirInvalido()">Pedido inválido (400)</button>
+    </div>
+    <div id="saida">Respostas aparecem aqui. Copie um trace_id dos logs para buscar no Tempo!\n</div>
+  </section>
+
+  <section class="card">
+    <h2>Modo Caos 🔥</h2>
+    <p class="sub">Provoque um incidente em um serviço e descubra a causa usando métricas → logs → traces.</p>
+    <div id="servicos">carregando…</div>
+  </section>
+
+  <section class="card">
+    <h2>Ferramentas</h2>
+    <p class="sub">Tudo roda localmente via Docker Compose.</p>
+    <ul class="links">
+      <li><a id="lnk-dash" target="_blank">Grafana — Dashboard “Pizzaria: Visão Geral”</a></li>
+      <li><a id="lnk-explore" target="_blank">Grafana — Explore (logs e traces)</a></li>
+      <li><a href="http://localhost:9090" target="_blank">Prometheus UI</a> (localhost:9090)</li>
+      <li><a href="/metrics" target="_blank">/metrics do serviço pedidos</a> (formato cru)</li>
+    </ul>
+  </section>
+</main>
+<script>
+  const saida = document.getElementById('saida');
+  const escrever = (t) => { saida.textContent = t + '\n' + saida.textContent; };
+
+  async function carregar() {
+    const cardapio = await (await fetch('/cardapio')).json();
+    document.getElementById('sabor').innerHTML = cardapio.map(c => `<option value="${c.sabor}">${c.sabor.replace('_',' ')} — R$ ${c.preco}</option>`).join('');
+    const cfg = await (await fetch('/painel/config')).json();
+    document.getElementById('lnk-dash').href = cfg.grafana + '/d/pizzaria-visao-geral';
+    document.getElementById('lnk-explore').href = cfg.grafana + '/explore';
+    atualizarCaos();
+  }
+
+  async function enviar(corpo) {
+    const ini = performance.now();
+    const r = await fetch('/pedidos', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(corpo) });
+    const j = await r.json();
+    escrever(`[${r.status}] ${Math.round(performance.now()-ini)} ms  ${JSON.stringify(j)}`);
+  }
+  const pedir = () => enviar({ sabor: sabor.value, quantidade: Number(qtd.value) });
+  const pedirInvalido = () => enviar({ sabor: 'abacaxi_com_sardinha', quantidade: 1 });
+  async function rajada(n) {
+    const opts = [...document.getElementById('sabor').options].map(o => o.value);
+    await Promise.all(Array.from({length:n}, () => enviar({ sabor: opts[Math.floor(Math.random()*opts.length)], quantidade: 1 })));
+  }
+
+  async function atualizarCaos() {
+    const estados = await (await fetch('/painel/caos')).json();
+    document.getElementById('servicos').innerHTML = estados.map(e => `
+      <div class="servico">
+        <div><b>${e.servico}</b><span class="modo ${e.modo.split(' ')[0]}">${e.modo}</span></div>
+        <div>${['normal','lento','erros'].map(m => `<button class="${e.modo===m?'ativo':''}" onclick="caos('${e.servico}','${m}')">${m}</button>`).join(' ')}</div>
+      </div>`).join('');
+  }
+  async function caos(servico, modo) {
+    await fetch('/painel/caos/' + servico, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ modo }) });
+    escrever(`⚙️  ${servico} agora está em modo "${modo}"`);
+    atualizarCaos();
+  }
+  carregar(); setInterval(atualizarCaos, 5000);
+</script>
+</body>
+</html>

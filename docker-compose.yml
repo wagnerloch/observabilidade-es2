@@ -1,33 +1,122 @@
-version: '3.8'
+# =====================================================================
+#  Pizzaria Observável — Engenharia de Software II
+#  docker compose up -d --build   ->  sobe a aplicação + a stack LGTM*
+#  (*Loki, Grafana, Tempo, Prometheus/"Mimir")
+# =====================================================================
+name: pizzaria-observavel
+
+# Configuração comum aos 3 microsserviços (mesma imagem, entrypoint diferente)
+x-app: &app
+  build: ./app
+  image: pizzaria-observavel:latest
+  restart: unless-stopped
+  depends_on: [tempo, loki]
+
+x-otel-env: &otel-env
+  # Traces -> Tempo (protocolo OTLP/HTTP)
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+  OTEL_METRICS_EXPORTER: none   # métricas vão pelo /metrics (Prometheus)
+  OTEL_LOGS_EXPORTER: none      # logs vão direto para o Loki (src/logger.ts)
+  # Logs -> Loki
+  LOKI_URL: http://loki:3100/loki/api/v1/push
 
 services:
-  app:
-    build: .
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./src:/usr/src/app/src
+  # ------------------------- APLICAÇÃO -------------------------
+  pedidos:
+    <<: *app
+    command: ["dist/pedidos.js"]
+    ports: ["3000:3000"]            # painel da pizzaria: http://localhost:3000
     environment:
-      - NODE_ENV=development
+      <<: *otel-env
+      OTEL_SERVICE_NAME: pedidos
+      PAGAMENTOS_URL: http://pagamentos:3000
+      COZINHA_URL: http://cozinha:3000
+      GRAFANA_URL: http://localhost:3001
+    depends_on: [pagamentos, cozinha, tempo, loki]
 
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  pagamentos:
+    <<: *app
+    command: ["dist/pagamentos.js"]
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: pagamentos
+
+  cozinha:
+    <<: *app
+    command: ["dist/cozinha.js"]
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: cozinha
+
+  # Clientes simulados: ~3 pedidos por segundo, o tempo todo
+  gerador-carga:
+    build: ./app
+    image: pizzaria-observavel:latest
+    entrypoint: ["node"]
+    command: ["/carga/gerador.js"]
+    volumes: ["./carga:/carga:ro"]
+    environment:
+      ALVO: http://pedidos:3000
+      TAXA_RPS: "3"
+    depends_on: [pedidos]
+    restart: unless-stopped
+
+  # Pico de acessos ("Black Friday"): docker compose run --rm estresse
+  estresse:
+    profiles: ["estresse"]
+    build: ./app
+    image: pizzaria-observavel:latest
+    entrypoint: ["node"]
+    command: ["/carga/gerador.js"]
+    volumes: ["./carga:/carga:ro"]
+    environment:
+      ALVO: http://pedidos:3000
+      TAXA_RPS: "40"
+      DURACAO_S: "90"
+    depends_on: [pedidos]
+
+  # ----------------------- OBSERVABILIDADE ----------------------
+  prometheus:                       # MÉTRICAS
+    image: prom/prometheus:v3.5.0
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-    depends_on:
-      - app
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1d
+      - --web.enable-remote-write-receiver   # recebe métricas geradas pelo Tempo
+      - --enable-feature=exemplar-storage    # guarda exemplars (métrica -> trace)
+    ports: ["9090:9090"]
+    volumes: ["./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    restart: unless-stopped
 
-  grafana:
-    image: grafana/grafana:latest
+  loki:                             # LOGS
+    image: grafana/loki:3.5.7
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    ports: ["3100:3100"]
+    volumes: ["./config/loki.yaml:/etc/loki/loki.yaml:ro"]
+    restart: unless-stopped
+
+  tempo:                            # TRACES
+    image: grafana/tempo:2.8.2
+    command: ["-config.file=/etc/tempo.yaml"]
     ports:
-      - "3001:3000"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
+      - "3200:3200"                 # API do Tempo
+      - "4318:4318"                 # OTLP/HTTP (para enviar traces de fora do Docker)
+    volumes: ["./config/tempo.yaml:/etc/tempo.yaml:ro"]
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  grafana:                          # VISUALIZAÇÃO
+    image: grafana/grafana:12.4.0
+    ports: ["3001:3000"]            # http://localhost:3001
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    depends_on:
-      - prometheus
+      # Ambiente de aula: entra direto, sem login, com permissão de Admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/pizzaria-visao-geral.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus, loki, tempo]
+    restart: unless-stopped

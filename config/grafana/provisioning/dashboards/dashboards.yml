@@ -1,0 +1,12 @@
+# Carrega automaticamente os dashboards (.json) da pasta /var/lib/grafana/dashboards
+apiVersion: 1
+
+providers:
+  - name: aula-observabilidade
+    folder: Aula de Observabilidade
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true      # os alunos podem editar e salvar o dashboard pronto
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
